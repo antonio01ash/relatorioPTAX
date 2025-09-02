@@ -1,35 +1,54 @@
-name: Relatório PTAX Diário
+import requests
+import datetime
+import pandas as pd
+from openpyxl import load_workbook
 
-on:
-  schedule:
-    - cron: "0 11 * * 1-5"
-  workflow_dispatch:
+def ultimo_dia_util():
+    hoje = datetime.date.today()
+    dia = hoje - datetime.timedelta(days=1)
+    while dia.weekday() >= 5:  # 5 = sábado, 6 = domingo
+        dia -= datetime.timedelta(days=1)
+    return dia
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+def pegar_ptax(data):
+    data_formatada = data.strftime("%m-%d-%Y")
+    url = f"https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarDia(dataCotacao=@dataCotacao)?@dataCotacao='{data_formatada}'&$top=100&$format=json"
+    res = requests.get(url).json()
+    df = pd.DataFrame(res.get("value", []))
+    if df.empty:
+        return None
 
-    steps:
-      - name: Baixar repositório
-        uses: actions/checkout@v3
+    # Se 'horaCotacao' existir, pega a última cotação; se não, pega a primeira linha
+    if "horaCotacao" in df.columns:
+        ultima_cotacao = df.sort_values("horaCotacao").iloc[-1]
+    else:
+        ultima_cotacao = df.iloc[0]
 
-      - name: Configurar Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.12"
+    return {
+        "Data": data,
+        "Compra (PTAX)": ultima_cotacao.get("cotacaoCompra"),
+        "Venda (PTAX)": ultima_cotacao.get("cotacaoVenda")
+    }
 
-      - name: Instalar dependências
-        run: |
-          pip install requests pandas openpyxl
+# --- Executa ---
+dia_util = ultimo_dia_util()
+cotacao = pegar_ptax(dia_util)
 
-      - name: Rodar script
-        run: |
-          python relatorio_ptax.py
+if cotacao:
+    relatorio = pd.DataFrame([cotacao])
+    arquivo = "relatorio_ptax.xlsx"
 
-      - name: Commitar Excel atualizado
-        run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-          git add relatorio_ptax.xlsx
-          git commit -m "Atualização automática do relatório PTAX"
-          git push
+    try:
+        book = load_workbook(arquivo)
+        writer = pd.ExcelWriter(arquivo, engine="openpyxl")
+        writer.book = book
+        writer.sheets = {ws.title: ws for ws in book.worksheets}
+        startrow = writer.sheets["Sheet1"].max_row
+        relatorio.to_excel(writer, index=False, header=False, startrow=startrow)
+        writer.close()
+    except FileNotFoundError:
+        relatorio.to_excel(arquivo, index=False)
+
+    print("✅ Relatório atualizado")
+else:
+    print("❌ Não foi encontrada cotação para o dia útil anterior.")
