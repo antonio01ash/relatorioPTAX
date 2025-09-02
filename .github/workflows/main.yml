@@ -1,35 +1,17 @@
-name: Relatório PTAX Diário
-
-on:
-  schedule:
-    - cron: "0 11 * * 1-5"
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Baixar repositório
-        uses: actions/checkout@v3
-
-      - name: Configurar Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.12"
-
-      - name: Instalar dependências
-        run: |
-          pip install requests pandas openpyxl
-
-      - name: Rodar script
-        run: |
-          python relatorio_ptax.py
-
-      - name: Commitar Excel atualizado
-        run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-          git add relatorio_ptax.xlsx
-          git commit -m "Atualização automática do relatório PTAX"
-          git push
+def pegar_ptax(data):
+    data_formatada = data.strftime("%m-%d-%Y")
+    url = f"https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarDia(dataCotacao=@dataCotacao)?@dataCotacao='{data_formatada}'&$top=100&$format=json"
+    res = requests.get(url).json()
+    df = pd.DataFrame(res.get("value", []))
+    if df.empty:
+        return None
+    # Se a coluna 'horaCotacao' não existir, pega a primeira linha
+    if "horaCotacao" in df.columns:
+        ultima_cotacao = df.sort_values("horaCotacao").iloc[-1]
+    else:
+        ultima_cotacao = df.iloc[0]
+    return {
+        "Data": data,
+        "Compra (PTAX)": ultima_cotacao.get("cotacaoCompra"),
+        "Venda (PTAX)": ultima_cotacao.get("cotacaoVenda")
+    }
